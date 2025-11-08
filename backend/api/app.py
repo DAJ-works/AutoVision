@@ -28,7 +28,6 @@ from backend.models.object_tracker import ObjectTracker
 from backend.models.person_reid import PersonReidentifier
 from backend.models.enhanced_filter import EnhancedFilter
 from backend.models.two_stage_detector import TwoStageDetector
-from backend.models.weapon_detector import WeaponDetector
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -111,6 +110,11 @@ def get_cases():
                         results = json.load(f)
                     
                     has_video = (case_dir / "output_video.mp4").exists()
+
+                    vehicle_counts = results.get('vehicle_counts', {}) or {}
+                    total_vehicle_detections = results.get('total_vehicle_detections')
+                    if total_vehicle_detections is None:
+                        total_vehicle_detections = sum(vehicle_counts.values()) if vehicle_counts else 0
                     
                     case_info = {
                         'case_id': case_dir.name,
@@ -120,6 +124,7 @@ def get_cases():
                         'total_detections': results.get('total_detections', 0),
                         'total_unique_objects': results.get('total_unique_objects', 0),
                         'num_persons': len(results.get('person_identities', [])),
+                        'num_vehicles': total_vehicle_detections,
                         'thumbnail': f"/api/cases/{case_dir.name}/thumbnail",
                         'has_video': has_video,
                         'status': 'completed'
@@ -210,6 +215,14 @@ def get_case(case_id):
         with open(result_file, 'r') as f:
             results = json.load(f)
         
+        vehicle_counts = results.get('vehicle_counts', {}) or {}
+        total_vehicle_detections = results.get('total_vehicle_detections')
+        if total_vehicle_detections is None:
+            total_vehicle_detections = sum(vehicle_counts.values()) if vehicle_counts else 0
+        results['vehicle_counts'] = vehicle_counts
+        results['num_vehicles'] = total_vehicle_detections
+        results['total_vehicle_detections'] = total_vehicle_detections
+
         if 'debug_info' in results and 'false_positive_reduction' in results.get('debug_info', {}):
             fp_reduction = results['debug_info']['false_positive_reduction']
             results['filtering_stats'] = {
@@ -1042,49 +1055,6 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
     print(f"Video path: {video_path}")
     print(f"Output directory: {output_dir}")
     print("===================================\n")
-    
-    # First try to find weapon model path
-    weapon_model_path = None
-    try:
-        # Get absolute path to weapon model using multiple methods
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        possible_paths = [
-            os.path.join(script_dir, "models", "weapon_detect.pt"),
-            os.path.join(script_dir, "../models", "weapon_detect.pt"),
-            os.path.join(script_dir, "backend/models", "weapon_detect.pt"),
-            os.path.join(os.getcwd(), "backend/models", "weapon_detect.pt"),
-            os.path.join(os.getcwd(), "models", "weapon_detect.pt")
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                weapon_model_path = path
-                logger.info(f"✅ Found weapon model at: {path}")
-                print(f"✅ Found weapon model at: {path}")
-                break
-            else:
-                logger.info(f"❌ Model not found at: {path}")
-                print(f"❌ Model not found at: {path}")
-        
-        if weapon_model_path is None:
-            logger.error("⚠️ Could not find weapon model in any expected location!")
-            print("⚠️ Could not find weapon model in any expected location!")
-            # Try direct loading approach
-            try:
-                # Try to load directly using WeaponDetector to see what happens
-                from backend.models.weapon_detector import WeaponDetector
-                test_detector = WeaponDetector()
-                logger.info(f"Direct WeaponDetector creation: {'success' if test_detector is not None else 'failed'}")
-                logger.info(f"Model loaded: {'yes' if test_detector.model is not None else 'no'}")
-                print(f"Direct WeaponDetector creation: {'success' if test_detector is not None else 'failed'}")
-                print(f"Model loaded: {'yes' if test_detector.model is not None else 'no'}")
-            except Exception as e:
-                logger.error(f"Direct WeaponDetector creation failed: {e}")
-                print(f"Direct WeaponDetector creation failed: {e}")
-    except Exception as e:
-        logger.error(f"Error during weapon model path resolution: {e}")
-        print(f"Error during weapon model path resolution: {e}")
-        logger.error(traceback.format_exc())
 
     try:
         # Update job status
@@ -1124,17 +1094,6 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
             temporal_consistency_frames=2  # Fewer frames for consistency to maximize person detection
         )
         
-        # Get the correct path to the model
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if not weapon_model_path:
-            weapon_model_path = os.path.join(current_dir, "models", "weapon_detect.pt")
-        
-        # Print path for debugging
-        logger.info(f"Weapon model path: {weapon_model_path}")
-        logger.info(f"Weapon model exists: {os.path.exists(weapon_model_path)}")
-        print(f"Weapon model path: {weapon_model_path}")
-        print(f"Weapon model exists: {os.path.exists(weapon_model_path)}")
-        
         logger.info("Creating VideoAnalyzerWithReID...")
         try:
             video_analyzer = VideoAnalyzerWithReID(
@@ -1145,27 +1104,10 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
                 enable_reid=True,
                 enable_enhanced_filtering=True,
                 enable_two_stage_detection=True,
-                enable_weapon_detection=True,
-                enable_interaction_detection=True,
-                weapon_model_path=weapon_model_path
+                enable_weapon_detection=False,
+                enable_interaction_detection=True
             )
-            logger.info("VideoAnalyzerWithReID created successfully")
-            
-            # Check if weapon detector was initialized
-            print("\n=== WEAPON DETECTOR STATUS CHECK ===")
-            if hasattr(video_analyzer, 'weapon_detector'):
-                print(f"Weapon detector exists: Yes")
-                print(f"Weapon detector is None: {video_analyzer.weapon_detector is None}")
-                logger.info(f"Weapon detector attribute exists: {video_analyzer.weapon_detector is not None}")
-                if video_analyzer.weapon_detector is not None:
-                    print(f"Model attribute exists: {hasattr(video_analyzer.weapon_detector, 'model')}")
-                    if hasattr(video_analyzer.weapon_detector, 'model'):
-                        print(f"Model is None: {video_analyzer.weapon_detector.model is None}")
-                    logger.info(f"Weapon detector model: {video_analyzer.weapon_detector.model is not None}")
-            else:
-                print("Weapon detector does not exist on video_analyzer")
-                logger.error("Weapon detector attribute doesn't exist in video_analyzer!")
-            print("===================================\n")
+            logger.info("VideoAnalyzerWithReID created successfully (weapon detection disabled)")
         except Exception as e:
             logger.error(f"Error creating VideoAnalyzerWithReID: {e}")
             print(f"Error creating VideoAnalyzerWithReID: {e}")
@@ -1181,7 +1123,7 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
             save_video=True,
             enable_enhanced_filtering=True,
             enable_two_stage_detection=True,
-            enable_weapon_detection=True,
+            enable_weapon_detection=False,
             enable_interaction_detection=True,
         )
         
@@ -1278,11 +1220,32 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
         report["timestamp"] = datetime.now().isoformat()
         report["video_path"] = str(video_path)
         report["output_directory"] = str(output_dir)
+        track_container = results.get('track_details') or results.get('tracks', [])
+        if isinstance(track_container, dict):
+            track_iterable = list(track_container.values())
+        elif isinstance(track_container, list):
+            track_iterable = track_container
+        else:
+            track_iterable = []
+
+        vehicle_track_count = 0
+        vehicle_classes = set()
+        if hasattr(video_analyzer, 'driving_behavior_analyzer') and video_analyzer.driving_behavior_analyzer:
+            vehicle_classes = video_analyzer.driving_behavior_analyzer.vehicle_class_names()
+            vehicle_track_count = sum(
+                1
+                for track in track_iterable
+                if track.get('class_name', '').lower() in vehicle_classes
+            )
+
         report["debug_info"] = {
-            "total_tracks": len(results.get('tracks', [])),
-            "person_tracks": sum(1 for t in results.get('tracks', {}).values() if t.get('class_name', '').lower() == 'person'),
+            "total_tracks": len(track_iterable),
+            "person_tracks": sum(1 for t in track_iterable if t.get('class_name', '').lower() == 'person'),
+            "vehicle_tracks": vehicle_track_count,
             "original_person_count": person_count,
             "final_person_count": len(report.get('person_identities', [])),
+            "vehicle_counts": results.get('vehicle_counts', {}),
+            "total_vehicle_detections": results.get('total_vehicle_detections', 0),
             "confidence_threshold": detector.confidence_threshold,
             "enhanced_filtering": True,
             "two_stage_detection": True,
@@ -1299,7 +1262,9 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
                     "min_hits": tracker.min_hits,
                     "iou_threshold": tracker.iou_threshold
                 }
-            }
+            },
+            "metrics": results.get('metrics', {}),
+            "driving_behavior": results.get('driving_behavior', {}),
         }
         
         # Save results
@@ -1358,19 +1323,19 @@ def legal_assistant_chat():
         return jsonify({'error': 'No message provided'}), 400
     
     try:
-        # Use Ollama with Enhanced Traffic Analyst Pro and RAG system
-        logger.info("Using Ollama with Traffic Analyst Pro and RAG for legal analysis")
+        # Use Ollama with LLaMA 3.1 and RAG system
+        logger.info("Using Ollama with LLaMA 3.1 and RAG for legal analysis")
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from rag_utils import RAGIncidentAnalyzer
         
-        # Initialize RAG analyzer with llama3.1 (use RAG for accurate legal answers)
+        # Initialize RAG analyzer
         analyzer = RAGIncidentAnalyzer(
             rules_path=str(Path(__file__).parent.parent / "data" / "ca_vehicle_rules.jsonl"),
-            ollama_model="llama3.1"  # Use stable llama3.1 with 84 comprehensive CA Vehicle Code rules via RAG
+            ollama_model="llama3.1"
         )
         
         # Load rules if not already loaded
-        if not hasattr(analyzer, '_rules_loaded') or not analyzer._rules_loaded:
+        if not hasattr(analyzer, '_rules_loaded'):
             analyzer.load_and_embed_rules()
             analyzer._rules_loaded = True
         
@@ -1401,7 +1366,7 @@ def legal_assistant_chat():
 Answer:"""
         
         # Call Ollama
-        response_text = analyzer.call_ollama(prompt, timeout=60)
+        response_text = analyzer.call_ollama(prompt)
         
         return jsonify({"response": response_text})
     
@@ -1446,19 +1411,19 @@ def enhanced_case_chat():
         # Add case_id to the data
         case_data['case_id'] = case_id
         
-        # Use Ollama with enhanced Traffic Analyst Pro for case analysis
-        logger.info(f"Using Ollama with Traffic Analyst Pro and RAG for case {case_id} analysis")
+        # Use Ollama with RAG for case analysis
+        logger.info(f"Using Ollama with LLaMA 3.1 and RAG for case {case_id} analysis")
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from rag_utils import RAGIncidentAnalyzer
         
-        # Initialize RAG analyzer with llama3.1 (use RAG for accurate legal answers)
+        # Initialize RAG analyzer
         analyzer = RAGIncidentAnalyzer(
             rules_path=str(Path(__file__).parent.parent / "data" / "ca_vehicle_rules.jsonl"),
-            ollama_model="llama3.1"  # Use stable llama3.1 with 84 comprehensive CA Vehicle Code rules via RAG
+            ollama_model="llama3.1"
         )
         
         # Load rules if not already loaded
-        if not hasattr(analyzer, '_rules_loaded') or not analyzer._rules_loaded:
+        if not hasattr(analyzer, '_rules_loaded'):
             analyzer.load_and_embed_rules()
             analyzer._rules_loaded = True
         
@@ -1502,7 +1467,7 @@ def enhanced_case_chat():
 Answer:"""
         
         # Call Ollama
-        response_text = analyzer.call_ollama(prompt, timeout=60)
+        response_text = analyzer.call_ollama(prompt)
         
         return jsonify({"response": response_text})
     

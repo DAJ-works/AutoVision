@@ -3,10 +3,11 @@ import cv2
 import numpy as np
 import json
 import logging
-from typing import List, Dict, Optional, Tuple, Any
-from pathlib import Path
-from datetime import datetime
 import time
+from collections import defaultdict, deque
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 from .weapon_detector import WeaponDetector
 from .enhanced_interaction_detector import EnhancedInteractionDetector
 from .enhanced_filter import EnhancedFilter
+from .driving_behavior_analyzer import DrivingBehaviorAnalyzer
 
 class EnhancedFilter:
     """
@@ -24,13 +26,13 @@ class EnhancedFilter:
     
     def __init__(
         self,
-        class_confidence_thresholds: Optional[Dict[str, float]] = None,
-        min_detection_size: Optional[Dict[str, Tuple[int, int]]] = None,
-        max_detection_size: Optional[Dict[str, Tuple[int, int]]] = None,
-        class_aspect_ratios: Optional[Dict[str, Tuple[float, float]]] = None,
-        motion_threshold: float = 0.5,
-        temporal_consistency_frames: int = 3,
-        iou_threshold: float = 0.5,
+    class_confidence_thresholds: Optional[Dict[str, float]] = None,
+    min_detection_size: Optional[Dict[str, Tuple[int, int]]] = None,
+    max_detection_size: Optional[Dict[str, Tuple[int, int]]] = None,
+    class_aspect_ratios: Optional[Dict[str, Tuple[float, float]]] = None,
+    motion_threshold: float = 0.2,
+    temporal_consistency_frames: int = 2,
+    iou_threshold: float = 0.45,
         frame_height: int = 1080,
         frame_width: int = 1920
     ):
@@ -60,79 +62,104 @@ class EnhancedFilter:
         """
         # Set default class-specific confidence thresholds
         self.class_confidence_thresholds = class_confidence_thresholds or {
-            'person': 0.25,         # Lower for person detection
-            'car': 0.6,
-            'truck': 0.6,
-            'bicycle': 0.5,
-            'motorcycle': 0.5,
-            'bus': 0.6,
-            'knife': 0.65,
-            'gun': 0.7,
-            'default': 0.5  # Default threshold for other classes
+            'person': 0.4,
+            'car': 0.45,
+            'truck': 0.45,
+            'bicycle': 0.4,
+            'motorcycle': 0.4,
+            'bus': 0.45,
+            'knife': 0.55,
+            'gun': 0.6,
+            'default': 0.35,
         }
-        
+
+        # Confidence floors protect against overly aggressive filtering
+        self.min_confidence_floor = {
+            'person': 0.2,
+            'car': 0.2,
+            'truck': 0.25,
+            'bicycle': 0.18,
+            'motorcycle': 0.18,
+            'bus': 0.25,
+            'knife': 0.35,
+            'gun': 0.4,
+            'default': 0.2,
+        }
+
         # Set default minimum detection sizes (width, height)
         self.min_detection_size = min_detection_size or {
-            'person': (25, 50),     # Smaller min size for people
-            'car': (50, 40),
-            'truck': (80, 60),
-            'bicycle': (30, 30),
-            'motorcycle': (30, 30),
-            'bus': (80, 60),
-            'knife': (15, 5),
-            'gun': (20, 10),
-            'default': (20, 20)
+            'person': (18, 36),
+            'car': (24, 20),
+            'truck': (32, 28),
+            'bicycle': (18, 18),
+            'motorcycle': (18, 18),
+            'bus': (34, 28),
+            'knife': (12, 4),
+            'gun': (14, 6),
+            'default': (16, 16),
         }
-        
+
         # Set default maximum detection sizes (width, height)
         self.max_detection_size = max_detection_size or {
-            'person': (300, 700),
-            'car': (500, 300),
-            'truck': (700, 500),
-            'bicycle': (250, 200),
-            'motorcycle': (250, 200),
-            'bus': (800, 600),
-            'knife': (150, 70),
-            'gun': (200, 100),
-            'default': (500, 500)
+            'person': (360, 880),
+            'car': (640, 420),
+            'truck': (820, 600),
+            'bicycle': (320, 240),
+            'motorcycle': (320, 240),
+            'bus': (900, 640),
+            'knife': (180, 80),
+            'gun': (220, 120),
+            'default': (640, 640),
         }
-        
+
         # Set default aspect ratio ranges (min, max) for each class
         self.class_aspect_ratios = class_aspect_ratios or {
-            'person': (0.2, 0.8),   # More lenient for persons
-            'car': (1.1, 3.5),
-            'truck': (1.1, 3.0),
-            'bicycle': (0.7, 2.0),
-            'motorcycle': (0.7, 2.0),
-            'bus': (1.0, 2.5),
-            'knife': (1.5, 6.0),
-            'gun': (1.5, 5.0),
-            'default': (0.4, 2.5)   # More lenient default
+            'person': (0.2, 1.2),
+            'car': (0.6, 4.5),
+            'truck': (0.8, 4.0),
+            'bicycle': (0.6, 2.5),
+            'motorcycle': (0.6, 2.5),
+            'bus': (0.7, 3.5),
+            'knife': (1.2, 8.0),
+            'gun': (1.2, 6.0),
+            'default': (0.3, 3.2),
         }
-        
+
         # Other parameters
         self.motion_threshold = motion_threshold
         self.temporal_consistency_frames = temporal_consistency_frames
         self.iou_threshold = iou_threshold
         self.frame_height = frame_height
         self.frame_width = frame_width
-        
+
         # Previous frame data for temporal consistency checks
         self.previous_detections = []  # List of previous detections by frame
-        
+
         # Background subtractor for motion validation
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500, 
-            varThreshold=16, 
-            detectShadows=False
+            history=500,
+            varThreshold=16,
+            detectShadows=False,
         )
-        
+
         # For moving average stabilization
         self.detection_history = {}  # object_id -> list of detections
         self.max_history = 5  # Number of frames to keep in history
-        
-        logger.info(f"Initialized EnhancedFilter with motion_threshold={motion_threshold}, " 
-                   f"temporal_frames={temporal_consistency_frames}")
+
+        # Adaptive confidence tracking per class
+        self.enable_adaptive_confidence = True
+        self.adaptive_min_samples = 4
+        self.adaptive_percentile = 25
+        self.adaptive_warmup_factor = 0.8
+        self.class_confidence_stats: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"detections": 0, "scores": deque(maxlen=40)}
+        )
+
+        logger.info(
+            "Initialized EnhancedFilter with motion_threshold=%s, temporal_frames=%s",
+            motion_threshold,
+            temporal_consistency_frames,
+        )
     
     def filter_detections(
         self, 
@@ -209,24 +236,51 @@ class EnhancedFilter:
     
     def _filter_by_confidence(self, detections: List[Dict]) -> List[Dict]:
         """Apply class-specific confidence thresholds."""
-        filtered = []
+        filtered: List[Dict] = []
         for det in detections:
-            class_name = det['class_name']
-            confidence = det['confidence']
-            
-            # Get threshold for this class, or use default
-            threshold = self.class_confidence_thresholds.get(
-                class_name, 
-                self.class_confidence_thresholds['default']
+            class_name = det.get('class_name', 'default')
+            confidence = float(det.get('confidence', 0.0))
+
+            base_threshold = self.class_confidence_thresholds.get(
+                class_name,
+                self.class_confidence_thresholds['default'],
             )
-            
-            # For weapon types, use higher thresholds
+            floor_threshold = self.min_confidence_floor.get(
+                class_name,
+                self.min_confidence_floor['default'],
+            )
+
+            stats = self.class_confidence_stats[class_name]
+            stats['detections'] += 1
+            stats['scores'].append(confidence)
+
+            effective_threshold = max(floor_threshold, base_threshold)
+
             if det.get('type') == 'weapon':
-                threshold = max(threshold, 0.6)  # Minimum 0.6 for weapons
-            
-            if confidence >= threshold:
+                floor_threshold = max(floor_threshold, 0.6)
+                effective_threshold = max(effective_threshold, 0.7)
+
+            if self.enable_adaptive_confidence:
+                if len(stats['scores']) < self.adaptive_min_samples:
+                    effective_threshold = max(
+                        floor_threshold,
+                        base_threshold * self.adaptive_warmup_factor,
+                    )
+                else:
+                    recent_scores = list(stats['scores'])
+                    adaptive_cutoff = float(
+                        np.percentile(recent_scores, self.adaptive_percentile)
+                    )
+                    effective_threshold = max(
+                        floor_threshold,
+                        min(base_threshold, adaptive_cutoff),
+                    )
+
+            det['effective_confidence_threshold'] = float(effective_threshold)
+
+            if confidence >= effective_threshold:
                 filtered.append(det)
-        
+
         return filtered
     
     def _filter_by_size_and_ratio(self, detections: List[Dict]) -> List[Dict]:
@@ -623,8 +677,8 @@ class TwoStageDetector:
             class_name = det.get('class_name', '')
             confidence = det.get('confidence', 0.0)
 
-            if confidence > 0.8 or class_name not in self.validate_classes or (
-                class_name == 'person' and confidence > 0.6
+            if confidence >= 0.65 or class_name not in self.validate_classes or (
+                class_name == 'person' and confidence >= 0.5
             ):
                 validated_detections.append(det)
                 continue
@@ -716,11 +770,11 @@ class TwoStageDetector:
                     similarity = good_matches / total_matches
                     max_similarity = max(max_similarity, similarity)
 
-            if max_similarity > 0.6 and len(cache) < self.max_exemplars_per_class:
+            if max_similarity > 0.55 and len(cache) < self.max_exemplars_per_class:
                 cache.append((descriptors, resized_roi))
 
-            is_valid = max_similarity >= 0.4
-            validation_score = max(0.0, min(1.0, max_similarity * 0.8 + 0.2))
+            is_valid = max_similarity >= 0.3
+            validation_score = max(0.0, min(1.0, max_similarity * 0.75 + 0.25))
             return is_valid, validation_score
         except Exception as exc:  # noqa: BLE001
             logger.warning("Error in feature-based validation: %s", exc)
@@ -852,6 +906,9 @@ class VideoAnalyzerWithReID:
             self.interaction_detector = EnhancedInteractionDetector(weapon_proximity_threshold=0.8,weapon_alert_confidence=0.4)
             logger.info("Interaction detection enabled")
         
+        # Driving behavior analysis engine focuses on vehicle compliance
+        self.driving_behavior_analyzer = DrivingBehaviorAnalyzer()
+
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
         
@@ -872,6 +929,13 @@ class VideoAnalyzerWithReID:
         self.frames = {}
         self.tracks = {}
         self.timeline = []
+        self.metrics = {}
+        self.behavior_report = {}
+        self.frame_detection_counts: List[int] = []
+        self.raw_detection_counts: List[int] = []
+        self.inference_times: List[float] = []
+        self.confidence_sum = 0.0
+        self.max_confidence = 0.0
     
     def analyze_video(
         self, 
@@ -969,6 +1033,7 @@ class VideoAnalyzerWithReID:
         print(f"Total frames: {total_frames}, Processing every {frame_interval} frame(s)")
         print(f"Using enhanced filtering: {use_enhanced_filtering}, two-stage detection: {use_two_stage_detection}")
         
+        analysis_start = time.time()
         processed_frames = 0
         analyzed_frames = 0
         frame_number = start_frame
@@ -999,9 +1064,16 @@ class VideoAnalyzerWithReID:
                         "pipeline": "two_stage" if use_two_stage_detection and hasattr(self, 'two_stage_detector') else "primary",
                     })
                     self.video_metadata.setdefault("detection_metadata", []).append(detection_metadata)
+                    inference_time = detection_metadata.get("inference_time")
+                    if inference_time is not None:
+                        try:
+                            self.inference_times.append(float(inference_time))
+                        except (TypeError, ValueError):
+                            pass
                 
                 # Apply enhanced filtering if enabled
                 pre_filter_count = len(detections)
+                self.raw_detection_counts.append(pre_filter_count)
                 if use_enhanced_filtering and hasattr(self, 'enhanced_filter'):
                     detections = self.enhanced_filter.filter_detections(
                         detections, 
@@ -1047,17 +1119,20 @@ class VideoAnalyzerWithReID:
                         if det.get('type') == 'weapon':
                             self.class_counts['weapon'] = self.class_counts.get('weapon', 0) + 1
 
+                self.frame_detection_counts.append(len(detections))
                 self.total_detections += pre_filter_count
                 self.valid_detections += len(detections)
                 self.filtered_detections += (pre_filter_count - len(detections))
                 
                 # Update class counts
                 for det in detections:
+                    confidence = float(det.get('confidence', 0.0))
+                    self.confidence_sum += confidence
+                    if confidence > self.max_confidence:
+                        self.max_confidence = confidence
+
                     class_name = det.get('class_name', 'Unknown')
-                    if class_name in self.class_counts:
-                        self.class_counts[class_name] += 1
-                    else:
-                        self.class_counts[class_name] = 1
+                    self.class_counts[class_name] = self.class_counts.get(class_name, 0) + 1
                 
                 # Filter person detections
                 person_detections = [d for d in detections if d.get('class_name', '').lower() == 'person']
@@ -1177,6 +1252,57 @@ class VideoAnalyzerWithReID:
         
         # Update video metadata
         self.video_metadata['processed_frames'] = processed_frames
+        analysis_duration = max(0.0, time.time() - analysis_start)
+        average_inference = (
+            sum(self.inference_times) / len(self.inference_times)
+            if self.inference_times
+            else 0.0
+        )
+        average_raw_detections = (
+            sum(self.raw_detection_counts) / len(self.raw_detection_counts)
+            if self.raw_detection_counts
+            else 0.0
+        )
+        average_confirmed_detections = (
+            sum(self.frame_detection_counts) / len(self.frame_detection_counts)
+            if self.frame_detection_counts
+            else 0.0
+        )
+        peak_detections = max(self.frame_detection_counts) if self.frame_detection_counts else 0
+        filter_rate = (
+            self.filtered_detections / self.total_detections
+            if self.total_detections > 0
+            else 0.0
+        )
+        avg_confidence = (
+            self.confidence_sum / self.valid_detections
+            if self.valid_detections > 0
+            else 0.0
+        )
+        processing_fps = (
+            processed_frames / analysis_duration
+            if analysis_duration > 0
+            else 0.0
+        )
+
+        self.metrics = {
+            'frames_processed': processed_frames,
+            'analysis_duration_sec': analysis_duration,
+            'processing_fps': processing_fps,
+            'total_raw_detections': self.total_detections,
+            'confirmed_detections': self.valid_detections,
+            'filtered_detections': self.filtered_detections,
+            'filtered_ratio': filter_rate,
+            'average_raw_detections_per_frame': average_raw_detections,
+            'average_detections_per_frame': average_confirmed_detections,
+            'max_detections_in_frame': peak_detections,
+            'average_confidence': avg_confidence,
+            'max_confidence': self.max_confidence,
+            'average_inference_ms': average_inference * 1000.0,
+        }
+
+        self.video_metadata['analysis_duration_sec'] = analysis_duration
+        self.video_metadata['average_inference_ms'] = self.metrics['average_inference_ms']
         
         # Save ReID database and visualizations
         if self.enable_reid:
@@ -1202,6 +1328,76 @@ class VideoAnalyzerWithReID:
             except Exception as e:
                 logger.error(f"Error saving ReID data: {e}")
         
+        track_summaries: List[Dict[str, Any]] = []
+        for track_id, track_data in self.tracks.items():
+            detections = track_data.get('detections', [])
+            first_time = track_data.get('first_time')
+            last_time = track_data.get('last_time')
+            duration = 0.0
+            if first_time is not None and last_time is not None:
+                try:
+                    duration = max(0.0, float(last_time) - float(first_time))
+                except (TypeError, ValueError):
+                    duration = 0.0
+
+            track_summaries.append(
+                {
+                    'id': track_id,
+                    'class_name': track_data.get('class_name', 'Unknown'),
+                    'first_frame': track_data.get('first_frame'),
+                    'last_frame': track_data.get('last_frame'),
+                    'first_time': first_time,
+                    'last_time': last_time,
+                    'num_detections': len(detections),
+                    'duration': duration,
+                }
+            )
+
+        track_summaries.sort(key=lambda item: item.get('duration', 0.0), reverse=True)
+
+        # Derive vehicle-focused analytics and driving behavior insights
+        behavior_report: Dict[str, Any] = {}
+        vehicle_counts: Dict[str, int] = {}
+        total_vehicle_detections = 0
+        vehicle_track_summaries: List[Dict[str, Any]] = []
+
+        if hasattr(self, 'driving_behavior_analyzer') and self.driving_behavior_analyzer:
+            try:
+                behavior_report = self.driving_behavior_analyzer.evaluate(
+                    frames=self.frames,
+                    tracks=self.tracks,
+                    video_metadata=self.video_metadata,
+                    class_counts=self.class_counts,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Driving behavior analysis failed: %s", exc)
+                behavior_report = {"error": str(exc)}
+
+            vehicle_counts = behavior_report.get('vehicle_counts', {}) or {}
+            total_vehicle_detections = behavior_report.get('total_vehicle_detections', 0) or 0
+            vehicle_track_summaries = [
+                summary for summary in track_summaries
+                if summary.get('class_name', '').lower() in self.driving_behavior_analyzer.vehicle_class_names()
+            ]
+
+        if not vehicle_counts and hasattr(self, 'driving_behavior_analyzer') and self.driving_behavior_analyzer:
+            vehicle_classes = self.driving_behavior_analyzer.vehicle_class_names()
+            vehicle_counts = {
+                class_name: count for class_name, count in self.class_counts.items()
+                if class_name.lower() in vehicle_classes
+            }
+            total_vehicle_detections = sum(vehicle_counts.values())
+            if not vehicle_track_summaries:
+                vehicle_track_summaries = [
+                    summary for summary in track_summaries
+                    if summary.get('class_name', '').lower() in vehicle_classes
+                ]
+
+        self.behavior_report = behavior_report
+        if isinstance(self.metrics, dict):
+            self.metrics['vehicle_track_count'] = len(vehicle_track_summaries)
+            self.metrics['vehicle_detection_count'] = total_vehicle_detections
+
         # Save analysis log
         analysis_log = {
             'timestamp': datetime.now().isoformat(),
@@ -1216,7 +1412,11 @@ class VideoAnalyzerWithReID:
             'person_identities': len(self.person_identities),
             'class_counts': self.class_counts,
             'enhanced_filtering': use_enhanced_filtering,
-            'two_stage_detection': use_two_stage_detection
+            'two_stage_detection': use_two_stage_detection,
+            'metrics': self.metrics,
+            'track_summaries': track_summaries[:20],
+            'driving_behavior': behavior_report,
+            'vehicle_counts': vehicle_counts,
         }
         
         with open(os.path.join(self.output_dir, "analysis_log.json"), 'w') as f:
@@ -1232,17 +1432,27 @@ class VideoAnalyzerWithReID:
             'class_counts': self.class_counts,
             'total_unique_objects': len(self.tracks),
             'person_identities': self.person_identities,
-            'tracks': self.tracks,
+            'tracks': track_summaries,
+            'track_details': self.tracks,
             'frames': self.frames,
             'timeline': self.timeline,
             'detector': f"yolov8{self.detector.model_size}",
             'enhanced_filtering': use_enhanced_filtering,
-            'two_stage_detection': use_two_stage_detection
+            'two_stage_detection': use_two_stage_detection,
+            'metrics': self.metrics,
+            'driving_behavior': behavior_report,
+            'vehicle_counts': vehicle_counts,
+            'total_vehicle_detections': total_vehicle_detections,
+            'vehicle_tracks': vehicle_track_summaries,
         }
         
         # Log summary stats
-        logger.info(f"Analysis complete: {self.valid_detections} valid detections, "
-                   f"{self.filtered_detections} filtered out ({filter_rate:.1%} reduction)")
+        logger.info(
+            "Analysis complete: %s valid detections, %s filtered out (%.1f%% reduction)",
+            self.valid_detections,
+            self.filtered_detections,
+            self.metrics.get('filtered_ratio', 0.0) * 100.0,
+        )
         
         return results
     
@@ -1262,31 +1472,44 @@ class VideoAnalyzerWithReID:
         """
         # Ensure person identities exist
         if 'person_identities' not in results or not results['person_identities']:
-            # Try to create person identities from person tracks
+            track_container = results.get('track_details') or results.get('tracks', {})
+            if isinstance(track_container, dict):
+                track_iterable = track_container.items()
+            elif isinstance(track_container, list):
+                track_iterable = [(track.get('id'), track) for track in track_container]
+            else:
+                track_iterable = []
+
             person_identities = []
             person_id = 1
-            for track_id, track in results.get('tracks', {}).items():
-                if track.get('class_name', '').lower() == 'person':
-                    person = {
-                        'id': person_id,
-                        'metadata': {
-                            'appearances': len(track.get('detections', [])),
-                            'first_seen_frame': track.get('first_frame', 0),
-                            'last_seen_frame': track.get('last_frame', 0),
-                            'first_seen_time': track.get('first_time', 0),
-                            'last_seen_time': track.get('last_time', 0),
-                            'created_from_track': True
-                        }
+            for track_id, track in track_iterable:
+                class_name = track.get('class_name', '').lower()
+                if class_name != 'person':
+                    continue
+
+                detections = track.get('detections', [])
+                appearances = len(detections) if detections else track.get('num_detections', 0)
+                person = {
+                    'id': person_id,
+                    'metadata': {
+                        'appearances': appearances,
+                        'first_seen_frame': track.get('first_frame', 0),
+                        'last_seen_frame': track.get('last_frame', 0),
+                        'first_seen_time': track.get('first_time', 0),
+                        'last_seen_time': track.get('last_time', 0),
+                        'created_from_track': True
                     }
-                    person_identities.append(person)
-                    person_id += 1
-            
-            # Update results with extracted persons if any found
+                }
+                person_identities.append(person)
+                person_id += 1
+
             if person_identities:
                 results['person_identities'] = person_identities
                 print(f"Created {len(person_identities)} persons from tracks")
 
         # Create report structure
+        metrics = results.get('metrics', {})
+
         report = {
             'video_path': results.get('video_path', ''),
             'timestamp': datetime.now().isoformat(),
@@ -1296,19 +1519,30 @@ class VideoAnalyzerWithReID:
             'filtered_detections': results.get('filtered_detections', 0),
             'total_unique_objects': results.get('total_unique_objects', 0),
             'class_counts': results.get('class_counts', {}),
+            'vehicle_counts': results.get('vehicle_counts', {}),
+            'vehicle_tracks': results.get('vehicle_tracks', []),
+            'total_vehicle_detections': results.get('total_vehicle_detections', 0),
+            'driving_behavior': results.get('driving_behavior', {}),
             'person_identities': results.get('person_identities', []),
             'timeline': results.get('timeline', []),
             'false_positive_reduction': {
                 'enabled': results.get('enhanced_filtering', False),
                 'two_stage_detection': results.get('two_stage_detection', False),
                 'filtered_count': results.get('filtered_detections', 0),
-                'reduction_rate': results.get('filtered_detections', 0) / results.get('total_detections', 1) if results.get('total_detections', 0) > 0 else 0
+                'reduction_rate': metrics.get(
+                    'filtered_ratio',
+                    results.get('filtered_detections', 0) / results.get('total_detections', 1)
+                    if results.get('total_detections', 0) > 0
+                    else 0,
+                )
             }
         }
         
         # Add detector info
         if 'detector' in results:
             report['detector'] = results['detector']
+        if metrics:
+            report['metrics'] = metrics
         
         # Save report
         report_path = os.path.join(self.output_dir, "analysis_report.json")

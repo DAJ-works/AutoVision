@@ -90,7 +90,9 @@ class RAGIncidentAnalyzer:
         """Lazily initialize the sentence transformer model."""
         if self._embedding_model is None:
             logger.info(f"Loading embedding model: {self.embedding_model_name}")
-            self._embedding_model = SentenceTransformer(self.embedding_model_name)
+            # Force CPU for embedding model to avoid MPS compatibility issues
+            self._embedding_model = SentenceTransformer(self.embedding_model_name, device='cpu')
+            logger.info("Embedding model loaded on CPU")
         return self._embedding_model
     
     def _init_chroma(self):
