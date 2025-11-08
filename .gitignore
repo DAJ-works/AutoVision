@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+backend.log
+frontend.log
+nohup.out
+
+# Data
+data/uploads/*
+data/analysis/*
+!data/uploads/.gitkeep
+!data/analysis/.gitkeep
+
+# Models
+*.pt
+*.pth
+*.onnx
+!yolov8*.pt
+
+# Database
+backend/data/chroma_db/
+*.sqlite3
+
+# Node
+node_modules/
+frontend/build/
+frontend/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
+temp/
+*.tmp

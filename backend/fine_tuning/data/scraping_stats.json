@@ -1,0 +1,16 @@
+{
+  "total_rules": 84,
+  "total_training_examples": 181,
+  "sources": [
+    "catsip.berkeley.edu",
+    "leginfo.legislature.ca.gov"
+  ],
+  "categories": [
+    "speed-and-stopping",
+    "right-of-way",
+    "equipment",
+    "violations",
+    "general"
+  ],
+  "generated": "2025-11-08 10:51:30"
+}
