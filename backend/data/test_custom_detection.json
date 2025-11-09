@@ -1,0 +1,31 @@
+{
+  "camera_id": "test_cam",
+  "timestamp": "2025-11-08T15:00:00Z",
+  "frame_id": 100,
+  "detections": [
+    {
+      "label": "car",
+      "confidence": 0.95,
+      "bbox": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "color": "silver",
+      "direction": "southbound",
+      "speed_estimate": 55
+    },
+    {
+      "label": "stop_sign",
+      "confidence": 0.92,
+      "bbox": [
+        500,
+        100,
+        600,
+        250
+      ]
+    }
+  ],
+  "incident_notes": "Silver car appears to pass through intersection without stopping at stop sign"
+}

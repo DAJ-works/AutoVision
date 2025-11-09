@@ -1,0 +1,48 @@
+# Data files and uploads
+backend/api/data/uploads/
+backend/api/data/analysis/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Keep training data
+!backend/fine_tuning/data/training_data/ca_vehicle_code_training.jsonl
+
+# Model files (large binary files)
+*.pt
+*.pth
+*.onnx
+*.pb
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Node modules
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp

@@ -1,0 +1,54 @@
+{
+  "camera_id": "cam_intersection_01",
+  "timestamp": "2025-11-08T14:32:15.234Z",
+  "frame_id": 1847,
+  "video_path": "recordings/2025-11-08/intersection_01_1430.mp4",
+  "detections": [
+    {
+      "label": "car",
+      "confidence": 0.96,
+      "bbox": [120, 340, 380, 580],
+      "color": "blue",
+      "direction": "eastbound",
+      "speed_estimate": 35
+    },
+    {
+      "label": "car",
+      "confidence": 0.94,
+      "bbox": [620, 180, 850, 420],
+      "color": "red",
+      "direction": "northbound",
+      "speed_estimate": 42
+    },
+    {
+      "label": "traffic_light",
+      "confidence": 0.89,
+      "bbox": [450, 50, 490, 120],
+      "state": "red",
+      "direction": "northbound"
+    },
+    {
+      "label": "traffic_light",
+      "confidence": 0.91,
+      "bbox": [150, 280, 190, 350],
+      "state": "green",
+      "direction": "eastbound"
+    },
+    {
+      "label": "person",
+      "confidence": 0.87,
+      "bbox": [510, 450, 560, 640],
+      "location": "crosswalk",
+      "activity": "crossing"
+    },
+    {
+      "label": "stop_sign",
+      "confidence": 0.93,
+      "bbox": [720, 420, 780, 520],
+      "visible_to": "southbound"
+    }
+  ],
+  "incident_notes": "Red car appears to run red light while pedestrian is crossing. Blue car has green light but must yield to pedestrian in crosswalk.",
+  "weather": "clear",
+  "visibility": "good"
+}
