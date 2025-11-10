@@ -1,7 +1,6 @@
 # AutoVision
 
 #### Developers: Dhruv Kothari, Aarav Goel, Jayanth Veerappa
-#### Los Altos Hacks 2025 - Winners: 1st Place
 
 AutoVision is an advanced AI-powered system for **intelligent accident reconstruction and traffic flow analysis**. By combining computer vision, physics-based modeling, and large language models (LLMs), this tool automatically analyzes dashcam and traffic camera footage to reconstruct incidents, determine fault, and provide actionable insights for improving road safety.
 
